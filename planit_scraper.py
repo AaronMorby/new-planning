@@ -173,7 +173,7 @@ def app_is_recent(app, days):
 
     # Try several possible date fields
     date_value = (
-        first_present(app, ["start-date", "start_date", "date", "application-date", "received-date"]) or
+        first_present(app, ["description", "name", "proposal", "summary", "title"]) or
         get_text(app, "decision-date", "decision_date") or
         first_present(app, ["date_received", "received"])
     )
