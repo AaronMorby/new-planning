@@ -15,6 +15,7 @@ from urllib.error import HTTPError
 
 DEFAULT_API = "https://www.planning.data.gov.uk/entity.json?dataset=planning-application&limit=100&sort=start-date_desc"
 
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Fetch UK planning applications from Planning Data and build a dashboard."
@@ -35,9 +36,7 @@ def fetch_json(url):
         with urlopen(req, timeout=60) as response:
             return json.load(response)
     except HTTPError as exc:
-        raise SystemExit(
-            f"Planning Data API request failed with HTTP {exc.code}: {url}"
-        ) from exc
+        raise SystemExit(f"Planning Data API request failed with HTTP {exc.code}: {url}") from exc
 
 
 def flatten_values(obj):
@@ -79,19 +78,15 @@ def parse_date(value):
     text = str(value).strip()
     if not text:
         return None
-
     for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%d-%m-%Y"):
         try:
             return dt.datetime.strptime(text[:10], fmt).date()
         except ValueError:
             pass
-
     try:
         return dt.date.fromisoformat(text[:10])
     except ValueError:
-        pass
-
-    return None
+        return None
 
 
 def as_float(value):
@@ -100,16 +95,9 @@ def as_float(value):
     text = str(value).strip().lower()
     if not text:
         return None
-
-    text = (
-        text.replace("sqm", "")
-        .replace("sqm.", "")
-        .replace("m²", "")
-        .replace("m2", "")
-        .replace("square metres", "")
-        .replace("sq m", "")
-        .replace(",", "")
-    )
+    text = (text.replace("sqm", "").replace("sqm.", "").replace("m²", "")
+            .replace("m2", "").replace("square metres", "").replace("sq m", "")
+            .replace(",", ""))
     match = re.search(r"[-+]?\d*\.?\d+", text)
     if not match:
         return None
@@ -120,40 +108,31 @@ def as_float(value):
 
 
 def get_size_m2(app):
-    # Try common keys in nested objects
+    # Do not scan every value recursively: that incorrectly treats years and IDs as sizes.
     candidates = [
-        app.get("site-area"),
-        app.get("site_area"),
-        app.get("siteArea"),
-        app.get("area"),
-        app.get("site-area-sq-m"),
-        app.get("size"),
-        app.get("size_sq_m"),
-        app.get("square_metres"),
-        app.get("gross-floor-area"),
+        app.get("site-area"), app.get("site_area"), app.get("siteArea"),
+        app.get("area"), app.get("site-area-sq-m"), app.get("size"),
+        app.get("size_sq_m"), app.get("square_metres"), app.get("gross-floor-area"),
     ]
     for value in candidates:
         size = as_float(value)
         if size is not None:
             return size
-
-    # Try recursively across nested data structures
-    for value in flatten_values(app):
-        size = as_float(value)
-        if size is not None and size > 0:
-            return size
     return None
+
+
+def get_app_date(app):
+    return first_present(app, [
+        "start-date", "start_date", "date", "application-date", "received-date",
+        "date_received", "received", "decision-date", "decision_date",
+    ]) or ""
 
 
 def app_matches_area(app, terms):
     if not terms:
         return True
-
     text = " ".join(flatten_values(app)).lower()
-    for term in terms:
-        if term.lower() in text:
-            return True
-    return False
+    return any(term.lower().strip() in text for term in terms if term.strip())
 
 
 def app_matches_size(app, min_size, max_size):
@@ -170,158 +149,68 @@ def app_matches_size(app, min_size, max_size):
 def app_is_recent(app, days):
     if days is None or days < 0:
         return True
-
-    # Try several possible date fields
-    date_value = (
-        first_present(app, ["description", "name", "proposal", "summary", "title"]) or
-        get_text(app, "decision-date", "decision_date") or
-        first_present(app, ["date_received", "received"])
-    )
-    date_obj = parse_date(date_value)
+    date_obj = parse_date(get_app_date(app))
     if date_obj is None:
         return True
-
-    cutoff = dt.date.today() - dt.timedelta(days=days)
-    return date_obj >= cutoff
+    return date_obj >= dt.date.today() - dt.timedelta(days=days)
 
 
 def clean_html(value):
-    return html.escape(str(value), quote=False)
+    return html.escape(str(value), quote=True)
 
 
 def get_row_text(app):
     ref = first_present(app, ["reference", "id", "application-reference", "applicationNumber", "application_no"]) or ""
     address = first_present(app, ["address", "site_address", "site-address", "address_text", "location"]) or ""
     desc = first_present(app, ["description", "proposal", "summary", "title"]) or ""
-    received = first_present(app, ["start-date", "start_date", "date", "application-date", "received-date"]) or ""
+    received = get_app_date(app)
     status = first_present(app, ["decision", "status", "outcome"]) or ""
     size = get_size_m2(app)
     size_text = "" if size is None else f"{size:g}"
-
+    date_text = parse_date(received).isoformat() if parse_date(received) else ""
     return (
-        f"<tr data-address=\"{clean_html(address)}\" "
-        f"data-description=\"{clean_html(desc)}\" "
-        f"data-size=\"{clean_html(size_text)}\">"
-        f"<td>{clean_html(ref)}</td>"
-        f"<td>{clean_html(address)}</td>"
-        f"<td>{clean_html(desc)}</td>"
-        f"<td>{clean_html(received)}</td>"
-        f"<td>{clean_html(status)}</td>"
-        f"<td>{clean_html(size_text)}</td>"
-        f"</tr>"
+        f'<tr data-address="{clean_html(address)}" data-description="{clean_html(desc)}" '
+        f'data-size="{clean_html(size_text)}" data-date="{clean_html(date_text)}">'
+        f"<td>{clean_html(ref)}</td><td>{clean_html(address)}</td><td>{clean_html(desc)}</td>"
+        f"<td>{clean_html(received)}</td><td>{clean_html(status)}</td><td>{clean_html(size_text)}</td></tr>"
     )
 
 
 def build_page(applications, area_text, min_size, max_size, days):
     rows_html = "\n".join(get_row_text(app) for app in applications) if applications else '<tr><td colspan="6">No matching applications found.</td></tr>'
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Planning Applications Dashboard</title>
-  <style>
-    body {{ font: 16px Arial, sans-serif; margin: 2rem; }}
-    table {{ border-collapse: collapse; width: 100%; }}
-    th, td {{ border: 1px solid #ddd; padding: .6rem; text-align: left; vertical-align: top; }}
-    th {{ background: #eee; }}
-    input {{ padding: .5rem; font: inherit; }}
-    label {{ display: block; margin-bottom: .5rem; }}
-  </style>
-</head>
-<body>
-  <h1>Planning Applications Dashboard</h1>
-  <p>Showing {len(applications)} matching applications.</p>
+    return f'''<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Planning Applications Dashboard</title>
+<style>body {{ font: 16px Arial,sans-serif; margin:2rem }} table {{ border-collapse:collapse;width:100% }} th,td {{ border:1px solid #ddd;padding:.6rem;text-align:left;vertical-align:top }} th {{ background:#eee }} input {{ padding:.5rem;font:inherit }} label {{ display:block;margin-bottom:.5rem }} button {{ padding:.6rem 1rem;font:inherit;cursor:pointer }}</style></head>
+<body><h1>Planning Applications Dashboard</h1><p id="resultCount">Showing {len(applications)} matching applications.</p>
+<form id="filters" style="margin-bottom:1rem"><label>Search area or description: <input id="areaFilter" type="text" value="{html.escape(area_text or '', quote=True)}"></label>
+<label>Min size (m²): <input id="minSize" type="number" step="any" value="{' ' if min_size is None else min_size}"></label>
+<label>Max size (m²): <input id="maxSize" type="number" step="any" value="{' ' if max_size is None else max_size}"></label>
+<label>Days: <input id="days" type="number" min="0" value="{days}"></label><button type="submit">Update search terms</button></form>
+<table><thead><tr><th>Reference</th><th>Address</th><th>Description</th><th>Received</th><th>Status</th><th>Size (m²)</th></tr></thead><tbody id="results">{rows_html}</tbody></table>
+<script>
+const rows=[...document.querySelectorAll('#results tr')], form=document.getElementById('filters'), areaFilter=document.getElementById('areaFilter'), minSize=document.getElementById('minSize'), maxSize=document.getElementById('maxSize'), days=document.getElementById('days'), resultCount=document.getElementById('resultCount');
+function applyFilters() {{ const area=(areaFilter.value||'').toLowerCase().trim(), min=minSize.value===''?-Infinity:Number(minSize.value), max=maxSize.value===''?Infinity:Number(maxSize.value), dayCount=Number(days.value||0), cutoff=dayCount>0?Date.now()-dayCount*86400000:null; let count=0;
+rows.forEach(row=>{{ const address=(row.dataset.address||'').toLowerCase(), description=(row.dataset.description||'').toLowerCase(), size=row.dataset.size===''?null:Number(row.dataset.size), date=row.dataset.date||'', matchesArea=!area||address.includes(area)||description.includes(area), matchesSize=size===null||(size>=min&&size<=max), matchesDate=!cutoff||(date&&new Date(date).getTime()>=cutoff); const visible=matchesArea&&matchesSize&&matchesDate; row.style.display=visible?'':'none'; if(visible) count++; }}); resultCount.textContent=`Showing ${{count}} matching applications.`; localStorage.setItem('planningFilters',JSON.stringify({{area:areaFilter.value,min:minSize.value,max:maxSize.value,days:days.value}})); }}
+form.addEventListener('submit',event=>{{event.preventDefault();applyFilters();}}); [areaFilter,minSize,maxSize,days].forEach(el=>el.addEventListener('input',applyFilters)); applyFilters();
+</script></body></html>'''
 
-  <div style="margin-bottom: 1rem;">
-    <label>Area: <input id="areaFilter" type="text" value="{html.escape(area_text or '', quote=True)}"></label>
-    <label>Min size (m²): <input id="minSize" type="number" step="any" value="{'' if min_size is None else min_size}"></label>
-    <label>Max size (m²): <input id="maxSize" type="number" step="any" value="{'' if max_size is None else max_size}"></label>
-    <label>Days: <input id="days" type="number" min="0" value="{days}"></label>
-  </div>
-
-  <table>
-    <thead>
-      <tr>
-        <th>Reference</th>
-        <th>Address</th>
-        <th>Description</th>
-        <th>Received</th>
-        <th>Status</th>
-        <th>Size (m²)</th>
-      </tr>
-    </thead>
-    <tbody id="results">
-      {rows_html}
-    </tbody>
-  </table>
-
-  <script>
-    const rows = [...document.querySelectorAll('#results tr')];
-    const areaFilter = document.getElementById('areaFilter');
-    const minSize = document.getElementById('minSize');
-    const maxSize = document.getElementById('maxSize');
-    const days = document.getElementById('days');
-
-    function applyFilters() {{
-      const area = (areaFilter.value || '').toLowerCase().trim();
-      const min = minSize.value === '' ? Number.NEGATIVE_INFINITY : Number(minSize.value);
-      const max = maxSize.value === '' ? Number.POSITIVE_INFINITY : Number(maxSize.value);
-      const cutoff = Number(days.value || 0) > 0 ? Date.now() - (Number(days.value || 0) * 86400000) : null;
-
-      rows.forEach((row) => {{
-        const address = (row.dataset.address || '').toLowerCase();
-        const description = (row.dataset.description || '').toLowerCase();
-        const size = Number(row.dataset.size || '') || 0;
-        const date = row.dataset.date || '';
-        const matchesArea = !area || address.includes(area) || description.includes(area);
-        const matchesSize = size >= min && size <= max;
-        const matchesDate = !cutoff || (date && new Date(date).getTime() >= cutoff);
-
-        row.style.display = matchesArea && matchesSize && matchesDate ? '' : 'none';
-      }});
-    }}
-
-    [areaFilter, minSize, maxSize, days].forEach((el) => el.addEventListener('input', applyFilters));
-  </script>
-</body>
-</html>
-"""
 
 def main():
     args = parse_args()
     payload = fetch_json(args.api)
-
-    items = []
     if isinstance(payload, list):
         items = payload
     elif isinstance(payload, dict):
-        items = (
-            payload.get("entities")
-            or payload.get("items")
-            or payload.get("results")
-            or payload.get("applications")
-            or []
-        )
-
-    filtered = []
-    for app in items:
-        if not app_matches_area(app, args.area):
-            continue
-        if not app_matches_size(app, args.min_size, args.max_size):
-            continue
-        if not app_is_recent(app, args.days):
-            continue
-        filtered.append(app)
-
+        items = payload.get("entities") or payload.get("items") or payload.get("results") or payload.get("applications") or []
+    else:
+        items = []
+    filtered = [app for app in items if app_matches_area(app, args.area) and app_matches_size(app, args.min_size, args.max_size) and app_is_recent(app, args.days)]
     filtered = filtered[:args.limit] if args.limit else filtered
-
     out_dir = Path(args.out_dir)
     out_dir.mkdir(exist_ok=True, parents=True)
-
     (out_dir / "applications.json").write_text(json.dumps(filtered, indent=2), encoding="utf-8")
     (out_dir / "index.html").write_text(build_page(filtered, " ".join(args.area), args.min_size, args.max_size, args.days), encoding="utf-8")
-
     print(f"Created dashboard with {len(filtered)} applications in {out_dir}")
 
 
