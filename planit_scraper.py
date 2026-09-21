@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-API = "https://www.planit.org.uk/api/application.json"
+API = "https://www.planit.org.uk/api/applics.json"
 days = 7
 since = (dt.date.today() - dt.timedelta(days=days)).isoformat()
 url = API + "?" + urlencode({"date_received__gte": since, "limit": 1000})
