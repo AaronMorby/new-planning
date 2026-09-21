@@ -11,7 +11,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 DEFAULT_AUTHORITY = "CAMBD"
-DEFAULT_API = "https://www.planit.org.uk/api/recent/CAMBD/json"
+API = "https://www.planit.org.uk/api/applications.json?authority=627"
 
 
 def parse_args():
