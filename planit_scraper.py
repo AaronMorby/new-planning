@@ -339,7 +339,7 @@ def main():
     args = parse_args()
 
     if args.api == DEFAULT_API and args.authority != DEFAULT_AUTHORITY:
-        args.api = f"https://www.planit.org.uk/api/recent/{args.authority}/json"
+        args.api = f"https://www.planit.org.uk/api/applications.json?authority=627"
 
     applications = fetch_applications(args.api)
     filtered = []
