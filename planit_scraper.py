@@ -43,31 +43,4 @@ Path("docs/index.html").write_text(page, encoding="utf-8")
 Path("docs/applications.json").write_text(json.dumps(applications, indent=2), encoding="utf-8")
 print("Created dashboard with", len(applications), "applications")
 
-.github/workflows/update.yml
 
-yml
-name: Update planning applications dashboard
-
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: "0 */6 * * *"
-
-permissions:
-  contents: write
-
-jobs:
-  update:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-      - name: Build dashboard
-        run: python3 planit_scraper.py
-      - name: Save updated dashboard
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/
-          git diff --cached --quiet || git commit -m "Update planning applications dashboard"
-          git push
