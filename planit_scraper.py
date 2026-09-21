@@ -293,16 +293,16 @@ def main():
     payload = fetch_json(args.api)
 
     items = []
-    if isinstance(payload, list):
+     if isinstance(payload, list):
         items = payload
     elif isinstance(payload, dict):
-    items = (
-        payload.get("entities")
-        or payload.get("items")
-        or payload.get("results")
-        or payload.get("applications")
-        or []
-    )
+        items = (
+            payload.get("entities")
+            or payload.get("items")
+            or payload.get("results")
+            or payload.get("applications")
+            or []
+        )
 
     filtered = []
     for app in items:
