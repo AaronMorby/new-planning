@@ -292,7 +292,7 @@ def main():
     args = parse_args()
     payload = fetch_json(args.api)
 
-     items = []
+    items = []
     if isinstance(payload, list):
         items = payload
     elif isinstance(payload, dict):
