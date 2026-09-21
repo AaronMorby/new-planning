@@ -296,7 +296,13 @@ def main():
     if isinstance(payload, list):
         items = payload
     elif isinstance(payload, dict):
-        items = payload.get("items") or payload.get("results") or payload.get("applications") or []
+    items = (
+        payload.get("entities")
+        or payload.get("items")
+        or payload.get("results")
+        or payload.get("applications")
+        or []
+    )
 
     filtered = []
     for app in items:
