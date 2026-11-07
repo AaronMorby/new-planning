@@ -1,8 +1,15 @@
 {
-  "run_utc": "2026-11-07T20:47:48.698736+00:00",
-  "national_planit": "NOT COMPLETED",
-  "warning": "PLANNING SEARCH WARNING: collection failed; existing dashboard may be stale. Check Actions logs. No zero-result claim.",
-  "councils": {
-    "status": "NOT VERIFIED"
-  }
+  "live_collector": "Render planit-national-collector",
+  "last_verified_run_utc": "2026-11-07T17:00:51Z",
+  "last_verified_result": "successful",
+  "snapshot_date_utc": "2026-11-07",
+  "auto_sync": false,
+  "github_planit_direct": "DISABLED (provider rejected GitHub runner IP, 429 followed by 403)",
+  "render_dashboard_url": "https://dashboard.render.com/cron/crn-dbah7f5g1s2s73c3k6n0",
+  "source_window": "2026-11-01/2026-11-07",
+  "new_search_total": 81,
+  "approval_search_total": 255,
+  "recent_new_applications": 5,
+  "recent_approvals": 8,
+  "note": "GitHub Pages displays a dated snapshot; Render scheduled job is the ongoing live collection. No automated GitHub snapshot synchronisation is configured."
 }
