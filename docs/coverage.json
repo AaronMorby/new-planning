@@ -1,0 +1,8 @@
+{
+  "run_utc": "2026-11-07T20:41:11.338157+00:00",
+  "national_planit": "NOT COMPLETED",
+  "warning": "PLANNING SEARCH WARNING: collection failed; existing dashboard may be stale. Check Actions logs. No zero-result claim.",
+  "councils": {
+    "status": "NOT VERIFIED"
+  }
+}
