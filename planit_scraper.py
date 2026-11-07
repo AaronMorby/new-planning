@@ -11,6 +11,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
 import time
+from email.utils import parsedate_to_datetime
 
 DEFAULT_API = "https://www.planit.org.uk/api/applics/json"
 
@@ -31,13 +32,44 @@ def parse_args():
     return parser.parse_args()
 
 
+# The API explicitly rate-limits callers. Keep requests serial and respect Retry-After.
+MIN_REQUEST_GAP_SECONDS = 4
+_last_request_at = 0.0
+
 def fetch_json(url):
-    try:
-        request = Request(url, headers={"User-Agent": "new-planning-dashboard/1.0", "Accept": "application/json"})
-        with urlopen(request, timeout=60) as response:
-            return json.load(response)
-    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
-        raise RuntimeError(f"PlanIt API request failed: {exc}") from exc
+    global _last_request_at
+    request = Request(url, headers={"User-Agent": "UKPlanningTracker/1.1 (noncommercial monitoring; contact via GitHub AaronMorby/new-planning)", "Accept": "application/json"})
+    for attempt in range(5):
+        elapsed = time.monotonic() - _last_request_at
+        if elapsed < MIN_REQUEST_GAP_SECONDS:
+            time.sleep(MIN_REQUEST_GAP_SECONDS - elapsed)
+        _last_request_at = time.monotonic()
+        try:
+            with urlopen(request, timeout=60) as response:
+                return json.load(response)
+        except HTTPError as exc:
+            if exc.code == 403:
+                raise RuntimeError("PlanIt access denied (403): check provider access policy; do not retry as if rate-limited") from exc
+            if exc.code != 429:
+                raise RuntimeError(f"PlanIt HTTP {exc.code}: {exc.reason}") from exc
+            retry_after = exc.headers.get("Retry-After", "")
+            try:
+                delay = max(0, float(retry_after))
+            except ValueError:
+                try:
+                    delay = max(0, (parsedate_to_datetime(retry_after) - dt.datetime.now(dt.timezone.utc)).total_seconds())
+                except (TypeError, ValueError, OverflowError):
+                    delay = 60 * (attempt + 1)
+            if attempt == 4 or delay > 600:
+                raise RuntimeError(f"PlanIt rate limited (429); Retry-After={retry_after or 'not supplied'}. Not publishing incomplete results") from exc
+            print(f"RATE LIMIT: PlanIt HTTP 429, waiting {delay:.0f}s before retry {attempt + 2}/5", flush=True)
+            time.sleep(max(delay, 60))
+        except (URLError, TimeoutError, ValueError, OSError) as exc:
+            if attempt == 4:
+                raise RuntimeError(f"PlanIt request failed after retries: {exc}") from exc
+            delay = min(60, 5 * (2 ** attempt))
+            print(f"Transient request error; retry in {delay}s: {exc}", flush=True)
+            time.sleep(delay)
 
 
 def fetch_planit(args):
@@ -55,14 +87,7 @@ def fetch_planit(args):
             params = dict(base_params)
             params.update({date_filter: str(max(0, args.days)), "pg_sz": str(args.page_size), "page": str(page), "compress": "on"})
             url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(params), ""))
-            for attempt in range(3):
-                try:
-                    payload = fetch_json(url)
-                    break
-                except RuntimeError:
-                    if attempt == 2:
-                        raise
-                    time.sleep(2 ** attempt)
+            payload = fetch_json(url)
             if not isinstance(payload, dict) or not isinstance(payload.get("records"), list) or not isinstance(payload.get("total"), int):
                 raise RuntimeError(f"Invalid PlanIt response for {date_filter}, page {page}; cannot claim complete coverage")
             if payload.get("error"):
