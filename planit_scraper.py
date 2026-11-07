@@ -18,12 +18,13 @@ DEFAULT_API = "https://www.planit.org.uk/api/applics/json"
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--days", type=int, default=7)
-    parser.add_argument("--page-size", type=int, default=100)
-    parser.add_argument("--max-pages", type=int, default=200)
+    parser.add_argument("--page-size", type=int, default=200)
+    parser.add_argument("--max-pages", type=int, default=400)
+    parser.add_argument("--council-lookback", type=int, default=14)
     parser.add_argument("--area", action="append", default=[])
     parser.add_argument("--min-size", type=float, default=None)
     parser.add_argument("--max-size", type=float, default=None)
-    parser.add_argument("--limit", type=int, default=500)
+    parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--approved", action="store_true", help="Only include approved or granted decisions.")
     parser.add_argument("--api", default=DEFAULT_API)
     parser.add_argument("--out-dir", default="docs")
@@ -70,6 +71,8 @@ def fetch_planit(args):
             total = payload["total"]
             if not batch and count < total:
                 raise RuntimeError(f"Missing PlanIt page {page} for {date_filter}: {count}/{total}")
+            if total < 0 or count + len(batch) > total:
+                raise RuntimeError(f"Inconsistent PlanIt count for {date_filter}, page {page}")
             count += len(batch)
             for app in batch:
                 if not isinstance(app, dict):
@@ -86,8 +89,37 @@ def fetch_planit(args):
     if not seen:
         raise RuntimeError("PlanIt returned zero records across all national queries; refusing to publish a misleading empty dashboard")
     print("PlanIt coverage: " + "; ".join(summaries))
-    return list(seen.values())
+    return list(seen.values()), summaries
 
+
+
+WATCH_COUNCILS = ("Liverpool", "Kensington and Chelsea", "Portsmouth", "Newcastle upon Tyne", "City of London", "Canterbury")
+
+def council_coverage(args):
+    """Independent PlanIt council checks; an unavailable source is never a zero."""
+    checks = {}
+    parts = urlsplit(args.api)
+    for council in WATCH_COUNCILS:
+        params = dict(parse_qsl(parts.query))
+        params.update({"auth": council, "changed": str(max(args.days, args.council_lookback)),
+                       "pg_sz": "1", "page": "1", "compress": "on"})
+        for other in ("recent", "decided"):
+            params.pop(other, None)
+        url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(params), ""))
+        try:
+            payload = fetch_json(url)
+            if not isinstance(payload, dict) or not isinstance(payload.get("total"), int) or not isinstance(payload.get("records"), list):
+                raise RuntimeError("Invalid council response")
+            if payload.get("error"):
+                raise RuntimeError(str(payload["error"]))
+            checks[council] = {"status": "RESPONDING", "changed_records_in_lookback": payload["total"],
+                               "lookback_days": max(args.days, args.council_lookback),
+                               "note": "PlanIt aggregate response only; council website not independently verified"}
+        except RuntimeError as exc:
+            checks[council] = {"status": "NOT VERIFIED", "error": str(exc),
+                               "lookback_days": max(args.days, args.council_lookback),
+                               "note": "Not a zero-result claim; retry next run and check official council weekly list"}
+    return checks
 
 def first(app, *keys):
     for key in keys:
@@ -190,14 +222,22 @@ def build_page(apps, args):
 
 def main():
     args = parse_args()
-    apps = [app for app in fetch_planit(args) if keep(app, args)]
+    fetched, summaries = fetch_planit(args)
+    apps = [app for app in fetched if keep(app, args)]
+    checks = council_coverage(args)
     if args.limit:
         apps = apps[:args.limit]
     output = Path(args.out_dir)
     output.mkdir(parents=True, exist_ok=True)
     (output / "applications.json").write_text(json.dumps(apps, indent=2), encoding="utf-8")
+    coverage = {"run_utc": dt.datetime.now(dt.timezone.utc).isoformat(), "national_planit": "COMPLETE",
+                "national_queries": summaries, "source_caveat": "PlanIt is not independent council portal verification",
+                "councils": checks, "records_published": len(apps)}
+    (output / "coverage.json").write_text(json.dumps(coverage, indent=2), encoding="utf-8")
     (output / "index.html").write_text(build_page(apps, args), encoding="utf-8")
     print(f"Created dashboard with {len(apps)} national applications in {output}")
+    for council, state in checks.items():
+        print(f"COUNCIL COVERAGE {council}: {state[\x27status\x27]}")
 
 
 if __name__ == "__main__":
