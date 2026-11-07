@@ -237,7 +237,7 @@ def main():
     (output / "index.html").write_text(build_page(apps, args), encoding="utf-8")
     print(f"Created dashboard with {len(apps)} national applications in {output}")
     for council, state in checks.items():
-        print(f"COUNCIL COVERAGE {council}: {state[\x27status\x27]}")
+        print("COUNCIL COVERAGE {}: {}".format(council, state["status"]))
 
 
 if __name__ == "__main__":
