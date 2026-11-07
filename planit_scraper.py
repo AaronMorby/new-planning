@@ -157,8 +157,7 @@ def keep(app, args):
     if value is not None and args.max_size is not None and value > args.max_size:
         return False
     date = parse_date(application_date(app))
-    if args.days >= 0 and date and date < dt.date.today() - dt.timedelta(days=args.days):
-        return False
+    # Do not reject older applications newly decided or materially changed in the search window.
     return not args.approved or is_approved(app)
 
 
