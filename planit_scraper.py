@@ -9,13 +9,17 @@ import re
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
+import time
 
-DEFAULT_API = "https://www.planning.data.gov.uk/entity.json?dataset=planning-application&limit=100&sort=entry-date_desc"
+DEFAULT_API = "https://www.planit.org.uk/api/applics/json"
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--days", type=int, default=-1)
+    parser.add_argument("--days", type=int, default=7)
+    parser.add_argument("--page-size", type=int, default=100)
+    parser.add_argument("--max-pages", type=int, default=200)
     parser.add_argument("--area", action="append", default=[])
     parser.add_argument("--min-size", type=float, default=None)
     parser.add_argument("--max-size", type=float, default=None)
@@ -31,8 +35,58 @@ def fetch_json(url):
         request = Request(url, headers={"User-Agent": "new-planning-dashboard/1.0", "Accept": "application/json"})
         with urlopen(request, timeout=60) as response:
             return json.load(response)
-    except (HTTPError, URLError) as exc:
-        raise SystemExit(f"National Planning Data API request failed: {exc}") from exc
+    except (HTTPError, URLError, TimeoutError, ValueError) as exc:
+        raise RuntimeError(f"PlanIt API request failed: {exc}") from exc
+
+
+def fetch_planit(args):
+    """Fetch every page for new, changed and decided applications; fail closed."""
+    if args.page_size < 1 or args.page_size > 300 or args.max_pages < 1:
+        raise RuntimeError("Invalid pagination settings")
+    seen = {}
+    summaries = []
+    parts = urlsplit(args.api)
+    base_params = dict(parse_qsl(parts.query))
+    for date_filter in ("recent", "changed", "decided"):
+        count = 0
+        total = None
+        for page in range(1, args.max_pages + 1):
+            params = dict(base_params)
+            params.update({date_filter: str(max(0, args.days)), "pg_sz": str(args.page_size), "page": str(page), "compress": "on"})
+            url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(params), ""))
+            for attempt in range(3):
+                try:
+                    payload = fetch_json(url)
+                    break
+                except RuntimeError:
+                    if attempt == 2:
+                        raise
+                    time.sleep(2 ** attempt)
+            if not isinstance(payload, dict) or not isinstance(payload.get("records"), list) or not isinstance(payload.get("total"), int):
+                raise RuntimeError(f"Invalid PlanIt response for {date_filter}, page {page}; cannot claim complete coverage")
+            if payload.get("error"):
+                raise RuntimeError(f"PlanIt returned error for {date_filter}: {payload['error']}")
+            batch = payload["records"]
+            total = payload["total"]
+            if not batch and count < total:
+                raise RuntimeError(f"Missing PlanIt page {page} for {date_filter}: {count}/{total}")
+            count += len(batch)
+            for app in batch:
+                if not isinstance(app, dict):
+                    raise RuntimeError("Invalid application record")
+                key = str(first(app, "name", "uid", "reference", "id"))
+                if not key:
+                    raise RuntimeError("Application without identifier")
+                seen[key] = app
+            if count >= total:
+                break
+        else:
+            raise RuntimeError(f"Pagination limit hit for {date_filter}: {count}/{total}")
+        summaries.append(f"{date_filter}: {count}/{total} records, {page} pages")
+    if not seen:
+        raise RuntimeError("PlanIt returned zero records across all national queries; refusing to publish a misleading empty dashboard")
+    print("PlanIt coverage: " + "; ".join(summaries))
+    return list(seen.values())
 
 
 def first(app, *keys):
@@ -56,11 +110,11 @@ def parse_date(value):
 
 
 def application_date(app):
-    return first(app, "start-date", "start_date", "date_received", "date-received", "application-date")
+    return first(app, "start_date", "start-date", "date_received", "date-received", "application-date")
 
 
 def decision(app):
-    return first(app, "decision", "status", "outcome", "application-status", "decision-state")
+    return first(app, "app_state", "decision", "status", "outcome", "application-status", "decision-state")
 
 
 def is_approved(app):
@@ -77,14 +131,14 @@ def as_float(value):
 
 
 def size(app):
-    return as_float(first(app, "site-area", "site_area", "siteArea", "area", "size", "size_sq_m"))
+    return as_float(first(app, "site_area", "site-area", "siteArea", "area", "size", "size_sq_m"))
 
 
 def records(payload):
     if isinstance(payload, list):
         return payload
     if isinstance(payload, dict):
-        for key in ("entities", "results", "items", "applications"):
+        for key in ("records", "entities", "results", "items", "applications"):
             if isinstance(payload.get(key), list):
                 return payload[key]
     return []
@@ -116,7 +170,7 @@ def row(app):
     app_date = application_date(app)
     value = size(app)
     size_text = "" if value is None else f"{value:g}"
-    reference = first(app, "reference", "council-reference", "application-reference", "id")
+    reference = first(app, "reference", "uid", "name", "council-reference", "application-reference", "id")
     address = first(app, "address", "site-address", "location")
     description = first(app, "description", "proposal", "summary", "name")
     status = decision(app)
@@ -137,7 +191,7 @@ def build_page(apps, args):
 
 def main():
     args = parse_args()
-    apps = [app for app in records(fetch_json(args.api)) if keep(app, args)]
+    apps = [app for app in fetch_planit(args) if keep(app, args)]
     if args.limit:
         apps = apps[:args.limit]
     output = Path(args.out_dir)
